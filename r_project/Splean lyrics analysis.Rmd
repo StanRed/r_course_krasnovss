@@ -1,0 +1,197 @@
+---
+title: "Splean Song Lyrics Semantic Similarity"
+author: "Yashchenko Anastasia, Krasnov Stanislav "
+date: '19 июня 2018 г '
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library('dplyr')
+library(ggplot2)
+library('tidytext')
+library('tm')
+library('wordcloud2')
+library('igraph')
+```
+Our corpus-based study investigates the value of word frequency in text clustering. We have chosen a corpus of song lyrics in order to show how lexical diversity and word repetition influence the similarity between two given songs and, furthermore, albums.
+
+### Hypothesis
+Lyrics within one album are connected with lyrics within another album and this connection is based on song word frequency.
+
+### Data
+203 Splean songs (a popular russian music band) collected manually from the official web-site (http://splean.ru) and annotated with song and album titles. 
+
+### Pre-processing
+Using Python: converting to lower-case, removing punctuation + lemmatization. </br>
+Using R: removing stop-words.</br>
+We used Python for lemmatization as it is a usual way for us, since we were not aware of any efficient tool for lemmatization of russian texts in R.
+
+Loading data and libraries, removing stop words, using tidytext library:
+```{r}
+splean <- read.csv("DATA.csv", 
+                      encoding = "UTF-8", 
+                      stringsAsFactors = FALSE)
+newstops <- c(stopwords('ru'), c('весь', 'свой', 'твой'))
+remove_w <- function(x) removeWords(x, newstops)
+splean$text <- sapply(splean$text, remove_w)
+```
+To begin with, we can illustrate our corpus with a histogram of released songs per year.
+```{r}
+splean %>% 
+  group_by(album) %>% 
+  summarise(number_of_songs = n()) %>% 
+  ggplot() + 
+  geom_bar(aes(x = album, y = number_of_songs), stat = "identity")  +
+  theme(plot.title = element_text(hjust = 0.5),
+        legend.title = element_blank(),
+        axis.text.x = element_text(angle=60, hjust=1),
+        panel.grid.minor = element_blank()) +
+  ggtitle("Released Songs") +
+  labs(x = "Song Counting", y = NULL)
+```
+
+We use tm package to create dataframe with tokens of each song. Then we investigate, how many words there are in each song: 
+```{r}
+splean_words <- splean %>%
+  unnest_tokens(word, text) %>%
+  distinct() %>%
+  filter(nchar(word) > 3)
+word_count <- splean_words %>%
+  group_by(album,song_title) %>%
+  summarise(num_words = n())
+```
+Now let us visualize the most common words for splean lyrics:
+```{r}
+words_freq <- splean_words %>%
+  count(word, sort = TRUE) 
+wordcloud2(words_freq[1:300, ], size = .5)
+```
+Our data have the information on the album of a given song, so we use it to show the most frequent words for each album:
+```{r}
+theme_lyrics <- function() 
+{
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_blank(), 
+        axis.ticks = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.text = element_text(size=5),
+        legend.position = "none")
+}
+album_words <- splean_words %>% 
+  group_by(album) %>%
+  count(word, album, sort = TRUE) %>%
+  slice(seq_len(8)) %>%
+  ungroup() %>%
+  arrange(album,n) %>%
+  mutate(row = row_number()) 
+album_words %>%
+  ggplot(aes(row, n, fill = album)) +
+  geom_col() +
+  labs(x = NULL, y = "Song Count") +
+  ggtitle("Popular Words by album") + 
+  theme_lyrics() +  
+  facet_wrap(~album, scales = "free") +
+  scale_x_continuous(
+    breaks = album_words$row, 
+    labels = album_words$word) +
+  coord_flip()
+
+```
+</br>
+As we can see, in the album ‘Павловский парк’ the set of popular words is rather different from other albums (due to the fact ‘Павловский парк’ consists of only one song).
+
+## More parameters
+Since we are dealing with lyrics analysis, we should have a closer look at such parameters as lexical diversity and lexical density.
+
+### Lexical diversity
+Lexical diversity is the number of unique words in a given song.
+```{r}
+#LEXICAL DIVERSITY
+my_colors <- c("#E69F00", "#56B4E9", "#009E73", "#CC79A7", "#D55E00")
+lex_diversity_per_album <- splean_words %>%
+  group_by(album,song_title) %>%
+  summarise(lex_diversity = n_distinct(word)) %>%
+  arrange(desc(lex_diversity)) 
+
+diversity_plot <- lex_diversity_per_album %>%
+  ggplot(aes(album, lex_diversity)) +
+  geom_point(color = my_colors[3],
+             alpha = .4, 
+             size = 4, 
+             position = "jitter") + 
+  stat_smooth(color = "black", se = FALSE, method = "loess") +
+  geom_smooth(aes(x = album, y = lex_diversity), se = FALSE,
+              color = "blue", lwd = 2) +
+  ggtitle("Lexical Diversity") +
+  xlab("") + 
+  ylab("") +
+  scale_color_manual(values = my_colors) +
+  theme_classic() + 
+  theme_lyrics()
+```
+So, there is one song with a lot of unique words and several songs with above the average LD.
+
+### Lexical density
+Lexical density is the measure of word repetition within one song (the number of unique words divided by total word number).
+```{r}
+#LEXICAL DENSITY
+lex_density_per_album <- splean_words %>%
+  group_by(album,song_title) %>%
+  summarise(lex_density = n_distinct(word)/n()) %>%
+  arrange(desc(lex_density))
+
+density_plot <- lex_density_per_album %>%
+  ggplot(aes(album, lex_density)) + 
+  geom_point(color = my_colors[4],
+             alpha = .4, 
+             size = 4, 
+             position = "jitter") + 
+  stat_smooth(color = "black", 
+              se = FALSE, 
+              method = "lm") +
+  geom_smooth(aes(x = album, y = lex_density), 
+              se = FALSE,
+              color = "blue", 
+              lwd = 2) +
+  ggtitle("Lexical Density") + 
+  xlab("") + 
+  ylab("") +
+  scale_color_manual(values = my_colors) +
+  theme_classic() + 
+  theme_lyrics()
+diversity_plot
+density_plot
+
+```
+
+As we can see, a lot of songs have lexical density more than 0.8, what tells us that it is usual for author of these lyrics to repeat words in song.
+
+## Lyrics clustering
+Lyrics clustering is based on term frequency throughout the whole corpus. In order to perform text clustering, we convert all songs to document term matrices:
+```{r}
+corpus <- VCorpus(VectorSource(splean$text))
+dtm <-  DocumentTermMatrix(corpus)
+findFreqTerms(dtm, lowfreq=45)
+```
+We use k-means algorithm: 
+
+```{r}
+kmeans5<- kmeans(dtm, 13)
+kw_with_cluster<-as.data.frame(cbind(splean$text, splean$album, kmeans5$cluster)) 
+names(kw_with_cluster) <- c("words","album", "cluster")
+```
+And the final visualization:
+```{r}
+graph_df <- subset(kw_with_cluster,select=c('album','cluster'))
+g<-graph.data.frame(graph_df, directed=FALSE)
+
+plot(g,vertex.size = 3,
+     label.cex = 7,
+     edge.arrow.size = .005)
+```
+
+## Conclusion
+
+The final visualization shows that there is a cluster with a lot of songs in it (the number of edges shows how many songs in this album are connected with the cluster). An album with unpopular (among other albums) frequent words has only one connection to its cluster. Thus, all the albums tend to be adjacent from the semantic point of view. This leads us to the conclusion that there is no significant difference in lyrics semantics throughout the whole Splean creative career, and even if a new album releases, one can be sure that its core word choice will remain the same.
